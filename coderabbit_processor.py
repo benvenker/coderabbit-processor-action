@@ -342,8 +342,8 @@ def format_as_markdown(threads: List[dict], metadata: dict, repo: str) -> str:
             output.append(f"**Lines:** {thread['line']}")
         if thread['url']:
             output.append(f"**URL:** {thread['url']}")
-        if thread['database_id']:
-            output.append(f"**Reply To (database_id):** {thread['database_id']}")
+        if thread['thread_id']:
+            output.append(f"**Thread ID (for replies):** {thread['thread_id']}")
         if thread.get('is_outdated'):
             output.append("**Outdated:** Yes")
         output.append("")

@@ -22,6 +22,9 @@ inputs:
   include-resolved:
     description: 'Include resolved threads in output'
     default: 'false'
+  include-outdated:
+    description: 'Include outdated review comments in output'
+    default: 'false'
   verbose:
     description: 'Enable verbose output'
     default: 'false'
@@ -58,6 +61,10 @@ runs:
         # Optional flags
         if [ "${{ inputs.include-resolved }}" = "true" ]; then
           CMD="$CMD --include-resolved"
+        fi
+
+        if [ "${{ inputs.include-outdated }}" = "true" ]; then
+          CMD="$CMD --include-outdated"
         fi
         
         if [ "${{ inputs.verbose }}" = "true" ]; then

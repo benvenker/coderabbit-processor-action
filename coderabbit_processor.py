@@ -36,6 +36,7 @@ def fetch_review_threads(pr_number: int, repo: str) -> dict:
                   url
                   path
                   line
+              isOutdated
                 }
               }
             }
@@ -82,6 +83,19 @@ def filter_by_user(threads: list, user: str = 'coderabbitai') -> list:
     return filtered
 
 
+def filter_outdated(threads: list, exclude_outdated: bool = True) -> list:
+    """Filter out outdated threads if requested."""
+    if not exclude_outdated:
+        return threads
+
+    filtered = []
+    for thread in threads:
+        comments = thread.get('comments', {}).get('nodes', [])
+        if comments and not comments[0].get('isOutdated', False):
+            filtered.append(thread)
+    return filtered
+
+
 def extract_agent_prompt(body: str) -> Optional[str]:
     """Extract 'Prompt for AI Agents' or 'AI Agent Instructions' block if present."""
     # Try different patterns
@@ -116,32 +130,59 @@ def clean_comment_body(body: str) -> str:
     return body.strip()
 
 
-def infer_priority(body: str) -> str:
-    """Heuristic priority based on keywords."""
+def extract_severity(body: str) -> dict:
+    """Extract CodeRabbit's severity and category from comment body."""
+    pattern = r'^_[^\s]+ ([^_]+)_\s*\|\s*_[^\s]+ ([^_]+)_'
+    match = re.match(pattern, body, re.MULTILINE)
+
+    if not match:
+        return {
+            'category': 'Unknown',
+            'severity': 'Unknown',
+            'priority': infer_priority_fallback(body),
+            'parsed': False
+        }
+
+    category = match.group(1).strip()
+    severity = match.group(2).strip()
+
+    severity_map = {
+        'Critical': 'P0',
+        'Major': 'P1',
+        'Minor': 'P2',
+        'Trivial': 'P3'
+    }
+
+    return {
+        'category': category,
+        'severity': severity,
+        'priority': severity_map.get(severity, 'P3'),
+        'parsed': True
+    }
+
+
+def infer_priority_fallback(body: str) -> str:
+    """Fallback heuristic if CodeRabbit format not found."""
     body_lower = body.lower()
-    
-    # P0: Critical
+
     if any(word in body_lower for word in [
         'critical', 'security', 'vulnerable', 'broken',
         'injection', 'xss', 'crash', 'data loss', 'severe'
     ]):
         return 'P0'
-    
-    # P1: Important
+
     if any(word in body_lower for word in [
         'type safety', 'error handling', 'important',
         'bug', 'incorrect', 'validation', 'async', 'race condition'
     ]):
         return 'P1'
-    
-    # P2: Style/refactor
+
     if any(word in body_lower for word in [
         'style', 'documentation', 'refactor',
         'naming', 'comment', 'readability', 'format'
     ]):
         return 'P2'
-    
-    # P3: Optional
+
     return 'P3'
 
 
@@ -196,7 +237,8 @@ def estimate_tokens(data: dict) -> int:
     return len(json.dumps(data)) // 4
 
 
-def process_threads(raw_data: dict, include_resolved: bool = False) -> Tuple[List[dict], dict]:
+def process_threads(raw_data: dict, include_resolved: bool = False,
+                    include_outdated: bool = False) -> Tuple[List[dict], dict]:
     """Process raw GraphQL data into clean thread list and metadata."""
     pr_data = raw_data['data']['repository']['pullRequest']
     threads = pr_data['reviewThreads']['nodes']
@@ -205,6 +247,8 @@ def process_threads(raw_data: dict, include_resolved: bool = False) -> Tuple[Lis
     if not include_resolved:
         threads = filter_unresolved(threads)
     threads = filter_by_user(threads)
+    if not include_outdated:
+        threads = filter_outdated(threads, exclude_outdated=True)
     
     # Process each thread
     cleaned_threads = []
@@ -215,6 +259,7 @@ def process_threads(raw_data: dict, include_resolved: bool = False) -> Tuple[Lis
         
         first_comment = comments[0]
         body = first_comment.get('body', '')
+        severity_info = extract_severity(body)
         
         cleaned_thread = {
             'thread_id': thread['id'],
@@ -225,7 +270,11 @@ def process_threads(raw_data: dict, include_resolved: bool = False) -> Tuple[Lis
             'url': first_comment.get('url'),
             'suggestion': clean_comment_body(body),
             'agent_prompt': extract_agent_prompt(body),
-            'priority': infer_priority(body)
+            'priority': severity_info['priority'],
+            'category': severity_info['category'],
+            'severity': severity_info['severity'],
+            'severity_parsed': severity_info['parsed'],
+            'is_outdated': first_comment.get('isOutdated', False)
         }
         
         cleaned_threads.append(cleaned_thread)
@@ -276,19 +325,15 @@ def format_as_markdown(threads: List[dict], metadata: dict, repo: str) -> str:
     
     # Threads
     for i, thread in enumerate(threads, 1):
-        priority_label = {
-            'P0': 'Critical', 
-            'P1': 'Important', 
-            'P2': 'Style/Refactor', 
-            'P3': 'Optional'
-        }[thread['priority']]
-        
         # Extract title from first line of suggestion
         first_line = thread['suggestion'].split('\n')[0]
         title = first_line[:60] + '...' if len(first_line) > 60 else first_line
         title = re.sub(r'[*`#]', '', title).strip()
         
-        output.append(f"## Thread {i}: {title} [{thread['priority']}]")
+        if thread.get('severity_parsed'):
+            output.append(f"## Thread {i}: {title} [{thread['category']} - {thread['severity']}]")
+        else:
+            output.append(f"## Thread {i}: {title} [{thread['priority']}]")
         output.append("")
         
         if thread['file']:
@@ -299,6 +344,8 @@ def format_as_markdown(threads: List[dict], metadata: dict, repo: str) -> str:
             output.append(f"**URL:** {thread['url']}")
         if thread['database_id']:
             output.append(f"**Reply To (database_id):** {thread['database_id']}")
+        if thread.get('is_outdated'):
+            output.append("**Outdated:** Yes")
         output.append("")
         
         # Agent instructions if present
@@ -370,6 +417,8 @@ def main():
                        help='Repository (owner/repo)')
     parser.add_argument('--include-resolved', action='store_true',
                        help='Include resolved threads')
+    parser.add_argument('--include-outdated', action='store_true',
+                       help='Include outdated comments')
     parser.add_argument('--dry-run', action='store_true',
                        help='Show statistics only')
     parser.add_argument('--verbose', action='store_true',
@@ -389,7 +438,11 @@ def main():
             raw_data = json.load(f)
     
     # Process
-    threads, metadata = process_threads(raw_data, args.include_resolved)
+    threads, metadata = process_threads(
+        raw_data,
+        args.include_resolved,
+        args.include_outdated
+    )
     
     if args.verbose:
         print(f"Processed {len(threads)} unresolved threads")

@@ -191,7 +191,7 @@ The action generates clean, structured markdown:
 **File:** `server/routes.ts`
 **Lines:** 45
 **URL:** https://github.com/.../pull/1#discussion_r123
-**Reply To (database_id):** 123456789
+**Thread ID (for replies):** PR_kwDOABCDEF4ABCDEFGH
 
 ### AI Agent Instructions (Priority)
 Ensure type validation before database insertion.

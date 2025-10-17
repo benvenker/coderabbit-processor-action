@@ -48,6 +48,7 @@ process_threads(raw_data, include_resolved, include_outdated)
 
 format_as_markdown(threads, metadata)
   → Outputs agent-optimized markdown
+  → Includes thread_id for replying to conversations
 ```
 
 ## Features
@@ -83,7 +84,27 @@ Every thread gets a P0-P3 priority for sorting:
 - **P2**: Style/refactoring
 - **P3**: Optional improvements
 
-### 4. Pattern Detection
+### 4. Thread ID for Replies
+
+The markdown output includes `Thread ID (for replies)` which is the GraphQL `thread['id']` needed for the `addPullRequestReviewComment` mutation:
+
+```graphql
+mutation {
+  addPullRequestReviewComment(input: {
+    pullRequestReviewThreadId: "PR_kwDOABCDEF4ABCDEFGH",
+    body: "Your reply here"
+  }) {
+    comment {
+      id
+      body
+    }
+  }
+}
+```
+
+**Important**: Use `thread_id`, not `database_id` or `comment_id` for replying to threads.
+
+### 5. Pattern Detection
 
 Identifies recurring issues across threads for systematic fixes.
 

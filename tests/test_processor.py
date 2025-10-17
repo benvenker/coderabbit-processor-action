@@ -6,10 +6,21 @@ Run with:
     python3 test_processor.py
 """
 
+import os
 import sys
+from pathlib import Path
 
-from coderabbit_processor import (clean_comment_body, extract_severity,
-                                  filter_outdated, infer_priority_fallback)
+# Ensure repository root is on sys.path so coderabbit_processor is importable
+root_path = Path(__file__).resolve().parent.parent
+if str(root_path) not in sys.path:
+    sys.path.insert(0, str(root_path))
+
+from coderabbit_processor import (
+    clean_comment_body,
+    extract_severity,
+    filter_outdated,
+    infer_priority_fallback,
+)
 
 tests_run = 0
 tests_passed = 0

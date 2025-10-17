@@ -62,24 +62,24 @@ cleaned_thread = {
 }
 ```
 
-### Markdown Output (❌ Incorrect)
+### Markdown Output (✅ Correct after fix)
 
-In `coderabbit_processor.py` lines 345-346, we output:
+In `coderabbit_processor.py` we now output the thread ID in the generated markdown:
 
 ```python
-if thread['database_id']:
-    output.append(f"**Reply To (database_id):** {thread['database_id']}")
+if thread['thread_id']:
+    output.append(f"**Thread ID (for replies):** {thread['thread_id']}")
 ```
 
-**Problem**: We're showing `database_id` (comment's REST API ID) instead of `thread_id` (thread's GraphQL ID).
+This ensures the published review markdown contains the GraphQL thread ID needed to reply via `addPullRequestReviewComment`.
 
 ## What Each ID Is Used For
 
-| ID Field | Type | Purpose | Used For |
-|----------|------|---------|----------|
-| `thread['id']` | GraphQL Global ID | Identify the review thread | ✅ **Replying to thread with `addPullRequestReviewComment`** |
-| `comment['id']` | GraphQL Global ID | Identify a specific comment | Editing/deleting a specific comment |
-| `comment['databaseId']` | Integer | REST API compatibility | Legacy REST API operations, permalinks |
+| ID Field                | Type              | Purpose                     | Used For                                                    |
+| ----------------------- | ----------------- | --------------------------- | ----------------------------------------------------------- |
+| `thread['id']`          | GraphQL Global ID | Identify the review thread  | ✅ **Replying to thread with `addPullRequestReviewComment`** |
+| `comment['id']`         | GraphQL Global ID | Identify a specific comment | Editing/deleting a specific comment                         |
+| `comment['databaseId']` | Integer           | REST API compatibility      | Legacy REST API operations, permalinks                      |
 
 ## Correction Needed
 
@@ -101,8 +101,8 @@ if thread['database_id']:
 ## Validation Results
 
 ✅ **Data extraction**: Correctly using `thread['id']` for thread identification  
-❌ **Markdown output**: Incorrectly showing `database_id` instead of `thread_id`  
-🔧 **Fix required**: Update markdown formatter to output `thread_id`
+✅ **Markdown output**: Shows `thread_id` (GraphQL ID) required for replies  
+✅ **Documentation**: README/AGENTS now explain thread IDs for replies
 
 ## References
 

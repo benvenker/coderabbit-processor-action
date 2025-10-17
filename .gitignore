@@ -49,3 +49,6 @@ review_*.md
 review_*.json
 raw_*.json
 
+# But keep test fixtures
+!fixtures/
+

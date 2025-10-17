@@ -20,5 +20,5 @@ jobs:
           python-version: '3.x'
       
       - name: Run tests
-        run: python3 test_processor.py
+        run: python3 tests/test_processor.py
 

@@ -20,6 +20,7 @@ from coderabbit_processor import (
     extract_severity,
     filter_outdated,
     infer_priority_fallback,
+    resolve_thread_outdated,
 )
 
 tests_run = 0
@@ -79,8 +80,8 @@ def test_extract_severity_edge_cases() -> None:
 def test_filter_outdated_excludes() -> None:
     """Ensure outdated comments are removed when filtering is enabled."""
     threads = [
-        {"comments": {"nodes": [{"isOutdated": False, "body": "Current"}]}},
-        {"comments": {"nodes": [{"isOutdated": True, "body": "Outdated"}]}},
+        {"comments": {"nodes": [{"outdated": False, "body": "Current"}]}},
+        {"comments": {"nodes": [{"outdated": True, "body": "Outdated"}]}},
     ]
 
     filtered = filter_outdated(threads, exclude_outdated=True)
@@ -95,8 +96,8 @@ def test_filter_outdated_excludes() -> None:
 def test_filter_outdated_includes() -> None:
     """Ensure outdated comments remain when filtering disabled."""
     threads = [
-        {"comments": {"nodes": [{"isOutdated": False}]}},
-        {"comments": {"nodes": [{"isOutdated": True}]}},
+        {"comments": {"nodes": [{"outdated": False}]}},
+        {"comments": {"nodes": [{"outdated": True}]}},
     ]
 
     filtered = filter_outdated(threads, exclude_outdated=False)
@@ -109,6 +110,19 @@ def test_priority_fallback() -> None:
     test("priority P1: type safety keyword", infer_priority_fallback("Fix type safety here") == "P1")
     test("priority P2: style keyword", infer_priority_fallback("Refactor this code") == "P2")
     test("priority P3: default", infer_priority_fallback("Some random text here") == "P3")
+
+
+def test_resolve_thread_outdated_variants() -> None:
+    """Ensure outdated detection works for new and legacy data."""
+    thread_outdated = {"isOutdated": True, "comments": {"nodes": [{"outdated": False}]}}
+    comment_outdated = {"comments": {"nodes": [{"outdated": True}]}}
+    legacy_comment = {"comments": {"nodes": [{"isOutdated": True}]}}
+    current = {"comments": {"nodes": [{"outdated": False}]}}
+
+    test("resolve_thread_outdated: prefers thread flag", resolve_thread_outdated(thread_outdated) is True)
+    test("resolve_thread_outdated: uses comment outdated", resolve_thread_outdated(comment_outdated) is True)
+    test("resolve_thread_outdated: supports legacy field", resolve_thread_outdated(legacy_comment) is True)
+    test("resolve_thread_outdated: detects current thread", resolve_thread_outdated(current) is False)
 
 
 def test_clean_comment() -> None:
@@ -131,6 +145,7 @@ def main() -> None:
     test_filter_outdated_excludes()
     test_filter_outdated_includes()
     test_priority_fallback()
+    test_resolve_thread_outdated_variants()
     test_clean_comment()
 
     print(f"\n{'=' * 50}")
@@ -146,4 +161,3 @@ def main() -> None:
 
 if __name__ == "__main__":  # pragma: no cover
     main()
-

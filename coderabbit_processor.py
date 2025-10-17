@@ -27,6 +27,7 @@ def fetch_review_threads(pr_number: int, repo: str) -> dict:
             nodes{
               id
               isResolved
+              isOutdated
               comments(first:20){
                 nodes{
                   id
@@ -36,7 +37,7 @@ def fetch_review_threads(pr_number: int, repo: str) -> dict:
                   url
                   path
                   line
-              isOutdated
+                  outdated
                 }
               }
             }
@@ -83,6 +84,24 @@ def filter_by_user(threads: list, user: str = 'coderabbitai') -> list:
     return filtered
 
 
+def resolve_thread_outdated(thread: dict) -> bool:
+    """Determine whether a thread should be treated as outdated."""
+    thread_flag = thread.get('isOutdated')
+    if thread_flag is not None:
+        return thread_flag
+
+    comments = thread.get('comments', {}).get('nodes', [])
+    if not comments:
+        return False
+
+    first_comment = comments[0]
+    if 'outdated' in first_comment:
+        return first_comment['outdated']
+
+    # Backward compatibility for cached data created before this update.
+    return first_comment.get('isOutdated', False)
+
+
 def filter_outdated(threads: list, exclude_outdated: bool = True) -> list:
     """Filter out outdated threads if requested."""
     if not exclude_outdated:
@@ -90,8 +109,7 @@ def filter_outdated(threads: list, exclude_outdated: bool = True) -> list:
 
     filtered = []
     for thread in threads:
-        comments = thread.get('comments', {}).get('nodes', [])
-        if comments and not comments[0].get('isOutdated', False):
+        if not resolve_thread_outdated(thread):
             filtered.append(thread)
     return filtered
 
@@ -274,7 +292,7 @@ def process_threads(raw_data: dict, include_resolved: bool = False,
             'category': severity_info['category'],
             'severity': severity_info['severity'],
             'severity_parsed': severity_info['parsed'],
-            'is_outdated': first_comment.get('isOutdated', False)
+            'is_outdated': resolve_thread_outdated(thread)
         }
         
         cleaned_threads.append(cleaned_thread)
@@ -477,4 +495,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

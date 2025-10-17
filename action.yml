@@ -1,0 +1,79 @@
+name: 'CodeRabbit Review Processor'
+description: 'Transform CodeRabbit reviews into agent-optimized markdown with 80% token reduction'
+author: 'Ben Venker'
+
+branding:
+  icon: 'filter'
+  color: 'blue'
+
+inputs:
+  pr-number:
+    description: 'Pull request number to process'
+    required: true
+  output-file:
+    description: 'Output file path for processed review'
+    default: 'review_processed.md'
+  format:
+    description: 'Output format: markdown or json'
+    default: 'markdown'
+  repo:
+    description: 'Repository in owner/repo format (defaults to current repo)'
+    required: false
+  include-resolved:
+    description: 'Include resolved threads in output'
+    default: 'false'
+  verbose:
+    description: 'Enable verbose output'
+    default: 'false'
+
+outputs:
+  threads-count:
+    description: 'Number of unresolved threads processed'
+    value: ${{ steps.process.outputs.threads_count }}
+  token-estimate:
+    description: 'Estimated tokens in processed output'
+    value: ${{ steps.process.outputs.token_estimate }}
+  output-file:
+    description: 'Path to the generated output file'
+    value: ${{ inputs.output-file }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Process CodeRabbit review
+      id: process
+      shell: bash
+      run: |
+        # Build command
+        CMD="python3 ${{ github.action_path }}/coderabbit_processor.py"
+        CMD="$CMD --pr ${{ inputs.pr-number }}"
+        CMD="$CMD --output ${{ inputs.output-file }}"
+        CMD="$CMD --format ${{ inputs.format }}"
+        
+        # Optional repo override
+        if [ -n "${{ inputs.repo }}" ]; then
+          CMD="$CMD --repo ${{ inputs.repo }}"
+        fi
+        
+        # Optional flags
+        if [ "${{ inputs.include-resolved }}" = "true" ]; then
+          CMD="$CMD --include-resolved"
+        fi
+        
+        if [ "${{ inputs.verbose }}" = "true" ]; then
+          CMD="$CMD --verbose"
+        fi
+        
+        # Run processor and capture output
+        OUTPUT=$($CMD)
+        echo "$OUTPUT"
+        
+        # Extract statistics for outputs
+        THREADS=$(echo "$OUTPUT" | grep -oP 'Processed \K\d+(?= unresolved threads)' || echo "0")
+        TOKENS=$(echo "$OUTPUT" | grep -oP '~\K\d+(?= tokens)' | tail -1 || echo "0")
+        
+        echo "threads_count=$THREADS" >> $GITHUB_OUTPUT
+        echo "token_estimate=$TOKENS" >> $GITHUB_OUTPUT
+      env:
+        GH_TOKEN: ${{ github.token }}
+

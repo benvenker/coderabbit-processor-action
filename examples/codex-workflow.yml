@@ -1,0 +1,137 @@
+name: Codex CodeRabbit Auto-Processor
+
+# Automatically processes ALL CodeRabbit feedback when reviews are posted
+on:
+  pull_request_review:
+    types: [submitted]
+  pull_request_review_comment:
+    types: [created]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: codex-coderabbit-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  codex-review:
+    # Only run if comment is from CodeRabbit
+    if: |
+      (github.event.comment && github.event.comment.user.login == 'coderabbitai') ||
+      (github.event.review && github.event.review.user.login == 'coderabbitai')
+    
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.head_ref }}
+
+      - name: Setup Node with cache
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Process CodeRabbit review
+        id: process_review
+        uses: benvenker/coderabbit-processor-action@v1
+        with:
+          pr-number: ${{ github.event.pull_request.number }}
+          output-file: review_for_codex.md
+          verbose: true
+
+      - name: Run Codex to process all feedback
+        id: codex
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          output-file: codex_summary.md
+          codex-args: |
+            --search
+            --model gpt-5-codex
+            -c model_reasoning_effort="medium"
+            --sandbox workspace-write
+            -c sandbox_workspace_write.network_access=true
+          prompt: |
+            REPOSITORY: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+            BRANCH: ${{ github.head_ref }}
+            UNRESOLVED THREADS: ${{ steps.process_review.outputs.threads-count }} threads
+            TOKEN ESTIMATE: ~${{ steps.process_review.outputs.token-estimate }} tokens
+            
+            You are an automated CodeRabbit review processor.
+            
+            === MISSION ===
+            1. Read /AGENTS.md for project standards
+            2. Parse review_for_codex.md (pre-processed, unresolved only)
+            3. Process EVERY thread systematically by priority (P0→P3)
+            4. Make ONE bulk commit at the end with all changes
+            5. Reply to every thread with fix confirmation, rationale, or deferral
+            
+            === PROCESSING WORKFLOW ===
+            For EACH thread in review_for_codex.md:
+            
+            1. Read context (file, AGENTS.md)
+            2. Assess alignment with standards
+            3. Take action:
+               - IF AGREE + SIMPLE: Apply fix, stage, reply with confirmation
+               - IF DISAGREE: Reply explaining why (reference AGENTS.md)
+               - IF COMPLEX: Reply with assessment, create Beads task
+               - IF ERROR: Reply with reason, continue processing
+            
+            4. Smart linting detection:
+               - 3+ markdown issues → install markdownlint
+               - 4+ type issues → review TypeScript config
+               - 3+ formatting issues → configure Prettier
+            
+            === FINAL STEPS ===
+            1. Review staged changes: git status
+            2. ONE commit: "fix: address CodeRabbit review feedback"
+            3. Push: git push origin ${{ github.head_ref }}
+            4. Write summary to codex_summary.md
+            
+            === TOOLS AVAILABLE ===
+            - gh (GitHub CLI) - for API interactions
+            - npm commands - build/check/test/lint
+            - git - staging and commits
+            
+            === CONSTRAINTS ===
+            - Follow TypeScript + ESM standards
+            - Maintain existing patterns
+            - Validate before committing
+            - Reply to EVERY thread
+            - ONE commit only
+
+      - name: Comment with summary
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let body = '## 🤖 Codex Processing Complete\n\n';
+            body += `**Threads Processed:** ${{ steps.process_review.outputs.threads-count }}\n`;
+            body += `**Token Usage:** ~${{ steps.process_review.outputs.token-estimate }}\n\n`;
+            
+            if (fs.existsSync('codex_summary.md')) {
+              body += fs.readFileSync('codex_summary.md', 'utf8');
+            }
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+

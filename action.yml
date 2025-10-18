@@ -1,63 +1,120 @@
-name: 'CodeRabbit Review Processor'
-description: 'Transform CodeRabbit reviews into agent-optimized markdown with 80% token reduction'
+name: 'CodeRabbit Codex Processor (Full Pipeline)'
+description: 'Complete automation: Process CodeRabbit reviews with Codex, apply fixes, and push changes'
 author: 'Ben Venker'
 
 branding:
-  icon: 'filter'
-  color: 'blue'
+  icon: 'zap'
+  color: 'purple'
 
 inputs:
+  # Required inputs
   pr-number:
     description: 'Pull request number to process'
     required: true
+  github-token:
+    description: 'GitHub token with repo and PR permissions'
+    required: true
+  openai-api-key:
+    description: 'OpenAI API key for Codex'
+    required: true
+
+  # Review processing options
   output-file:
-    description: 'Output file path for processed review'
-    default: 'review_processed.md'
-  format:
-    description: 'Output format: markdown or json'
-    default: 'markdown'
-  repo:
-    description: 'Repository in owner/repo format (defaults to current repo)'
-    required: false
+    description: 'Output file for processed review'
+    default: 'review_for_codex.md'
   include-resolved:
-    description: 'Include resolved threads in output'
+    description: 'Include resolved threads in review'
     default: 'false'
   include-outdated:
-    description: 'Include outdated review comments in output'
+    description: 'Include outdated comments in review'
     default: 'false'
-  verbose:
-    description: 'Enable verbose output'
+
+  # Project configuration
+  agent-docs-path:
+    description: 'Path to project agent documentation (e.g., AGENTS.md, README.md)'
+    default: 'AGENTS.md'
+  project-manager:
+    description: 'Project management tool (beads|linear|github|none)'
+    default: 'none'
+
+  # Codex configuration
+  codex-model:
+    description: 'Codex model to use'
+    default: 'gpt-5-codex'
+  custom-instructions:
+    description: 'Additional custom instructions to append to Codex prompt'
+    default: ''
+
+  # Environment setup
+  node-version:
+    description: 'Node.js version to setup'
+    default: '20'
+  install-go-tools:
+    description: 'Install Go tools (required for Beads project manager)'
+    default: 'false'
+  npm-ci:
+    description: 'Run npm ci to install dependencies'
     default: 'false'
 
 outputs:
   threads-count:
     description: 'Number of unresolved threads processed'
-    value: ${{ steps.process.outputs.threads_count }}
+    value: ${{ steps.process-review.outputs.threads-count }}
   token-estimate:
-    description: 'Estimated tokens in processed output'
-    value: ${{ steps.process.outputs.token_estimate }}
-  output-file:
-    description: 'Path to the generated output file'
-    value: ${{ inputs.output-file }}
+    description: 'Estimated tokens in processed review'
+    value: ${{ steps.process-review.outputs.token-estimate }}
+  changes-pushed:
+    description: 'Whether changes were pushed to the PR branch'
+    value: ${{ steps.push-changes.outputs.pushed }}
 
 runs:
   using: 'composite'
   steps:
+    - name: Setup Node.js
+      if: inputs.npm-ci == 'true'
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: 'npm'
+
+    - name: Install npm dependencies
+      if: inputs.npm-ci == 'true'
+      shell: bash
+      run: npm ci
+
+    - name: Cache Go modules
+      if: inputs.install-go-tools == 'true'
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-tools-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-tools-
+
+    - name: Setup Go tools
+      if: inputs.install-go-tools == 'true'
+      shell: bash
+      run: |
+        if ! command -v bd &> /dev/null; then
+          echo "Installing bd (Beads)..."
+          go install github.com/steveyegge/beads/cmd/bd@latest
+        else
+          echo "bd already available (cached)"
+        fi
+        echo "$HOME/go/bin" >> "$GITHUB_PATH"
+
     - name: Process CodeRabbit review
-      id: process
+      id: process-review
       shell: bash
       run: |
         # Build command
         CMD="python3 ${{ github.action_path }}/coderabbit_processor.py"
         CMD="$CMD --pr ${{ inputs.pr-number }}"
         CMD="$CMD --output ${{ inputs.output-file }}"
-        CMD="$CMD --format ${{ inputs.format }}"
-        
-        # Optional repo override
-        if [ -n "${{ inputs.repo }}" ]; then
-          CMD="$CMD --repo ${{ inputs.repo }}"
-        fi
-        
+        CMD="$CMD --format markdown"
+
         # Optional flags
         if [ "${{ inputs.include-resolved }}" = "true" ]; then
           CMD="$CMD --include-resolved"
@@ -66,21 +123,114 @@ runs:
         if [ "${{ inputs.include-outdated }}" = "true" ]; then
           CMD="$CMD --include-outdated"
         fi
-        
-        if [ "${{ inputs.verbose }}" = "true" ]; then
-          CMD="$CMD --verbose"
-        fi
-        
+
+        CMD="$CMD --verbose"
+
         # Run processor and capture output
         OUTPUT=$($CMD)
         echo "$OUTPUT"
-        
+
         # Extract statistics for outputs
         THREADS=$(echo "$OUTPUT" | grep -oP 'Processed \K\d+(?= unresolved threads)' || echo "0")
         TOKENS=$(echo "$OUTPUT" | grep -oP '~\K\d+(?= tokens)' | tail -1 || echo "0")
-        
-        echo "threads_count=$THREADS" >> $GITHUB_OUTPUT
-        echo "token_estimate=$TOKENS" >> $GITHUB_OUTPUT
-      env:
-        GH_TOKEN: ${{ github.token }}
 
+        echo "threads-count=$THREADS" >> $GITHUB_OUTPUT
+        echo "token-estimate=$TOKENS" >> $GITHUB_OUTPUT
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+
+    - name: Install Codex CLI
+      shell: bash
+      run: npm install -g @openai/codex
+
+    - name: Setup Codex config directory
+      shell: bash
+      run: mkdir -p "$HOME/.codex"
+      env:
+        CODEX_HOME: ${{ env.HOME }}/.codex
+
+    - name: Authenticate Codex
+      shell: bash
+      run: |
+        printf '%s' "${{ inputs.openai-api-key }}" | env -u OPENAI_API_KEY codex login --with-api-key
+        CONFIG_FILE="$HOME/.codex/config.toml"
+        if [ -f "$CONFIG_FILE" ]; then
+          if grep -q '^preferred_auth_method' "$CONFIG_FILE"; then
+            sed -i 's/^preferred_auth_method.*/preferred_auth_method = "apikey"/' "$CONFIG_FILE"
+          else
+            printf '\npreferred_auth_method = "apikey"\n' >> "$CONFIG_FILE"
+          fi
+        else
+          printf 'preferred_auth_method = "apikey"\n' > "$CONFIG_FILE"
+        fi
+
+    - name: Generate Codex prompt
+      shell: bash
+      run: |
+        # Export variables for template
+        export REPOSITORY="${{ github.repository }}"
+        export PR_NUMBER="${{ inputs.pr-number }}"
+        export BRANCH_DESC="PR #${{ inputs.pr-number }} branch"
+        export THREADS_COUNT="${{ steps.process-review.outputs.threads-count }}"
+        export TOKEN_ESTIMATE="${{ steps.process-review.outputs.token-estimate }}"
+        export SOURCE_RUN="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        export AGENT_DOCS_PATH="${{ inputs.agent-docs-path }}"
+        export PROJECT_MANAGER="${{ inputs.project-manager }}"
+        export REVIEW_FILE="${{ inputs.output-file }}"
+
+        # Generate prompt from template
+        bash ${{ github.action_path }}/codex-prompt-template.sh > codex_prompt.txt
+
+        # Append custom instructions if provided
+        if [ -n "${{ inputs.custom-instructions }}" ]; then
+          echo "" >> codex_prompt.txt
+          echo "=== ADDITIONAL INSTRUCTIONS ===" >> codex_prompt.txt
+          echo "${{ inputs.custom-instructions }}" >> codex_prompt.txt
+        fi
+
+    - name: Run Codex
+      shell: bash
+      run: |
+        codex exec \
+          --skip-git-repo-check \
+          --cd "${GITHUB_WORKSPACE}" \
+          --sandbox workspace-write \
+          --model ${{ inputs.codex-model }} \
+          --output-last-message codex_summary.md \
+          < codex_prompt.txt
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+
+    - name: Push changes to PR branch
+      id: push-changes
+      shell: bash
+      run: |
+        if [[ -n $(git status --porcelain) ]] || [[ $(git rev-list --count @{u}..HEAD 2>/dev/null || echo 0) -gt 0 ]]; then
+          git push origin HEAD
+          echo "pushed=true" >> $GITHUB_OUTPUT
+          echo "✓ Changes pushed to PR branch"
+        else
+          echo "pushed=false" >> $GITHUB_OUTPUT
+          echo "✓ No changes to push"
+        fi
+
+    - name: Comment with summary on PR
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const fs = require('fs');
+          let body = '## 🤖 Codex Processing Complete\n\n';
+          body += `**Threads Processed:** ${{ steps.process-review.outputs.threads-count }}\n`;
+          body += `**Token Usage:** ~${{ steps.process-review.outputs.token-estimate }}\n\n`;
+
+          if (fs.existsSync('codex_summary.md')) {
+            body += fs.readFileSync('codex_summary.md', 'utf8');
+          }
+
+          await github.rest.issues.createComment({
+            issue_number: parseInt('${{ inputs.pr-number }}'),
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body
+          });

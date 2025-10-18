@@ -4,27 +4,48 @@ This document provides context for AI agents (or developers) working on the Code
 
 ## Project Overview
 
-**CodeRabbit Review Processor Action** is a GitHub Action that fetches CodeRabbit review threads from pull requests, filters and processes them, and outputs clean, structured markdown optimized for AI agents.
+**CodeRabbit Codex Processor Action** is a GitHub Action available in two versions:
 
-**Key Value**: Reduces token usage by ~80% (71K → 14K tokens) while maintaining all critical review information.
+- **v2 (Full Pipeline)**: Complete end-to-end automation - processes CodeRabbit reviews with Codex, applies fixes, and updates PRs
+- **v1 (Processor Only)**: Fetches and processes CodeRabbit review threads into agent-optimized markdown (80% token reduction)
+
+**Key Value**:
+- v2: Turnkey automation from review → fixes → PR updates
+- v1: 80% token reduction (71K → 14K tokens) for custom AI workflows
 
 ## Architecture
 
-### Core Components
+### v2 (Full Pipeline) Components
 
-1. **`coderabbit_processor.py`** - Main Python script
+1. **`action.yml`** - Main composite action (v2)
+   - Orchestrates complete workflow
+   - Handles environment setup (Node, Go, npm)
+   - Calls processor, Codex, git operations, PR commenting
+   - ~215 lines
+
+2. **`processor/action.yml`** - Review processor sub-action (v1)
+   - Runs `coderabbit_processor.py`
+   - Outputs threads-count and token-estimate
+   - Can be used standalone as @v1
+
+3. **`codex-prompt-template.sh`** - Codex prompt generator
+   - Parameterized prompt template
+   - Supports multiple project managers
+   - Environment variable substitution
+
+4. **`coderabbit_processor.py`** - Python processor script
    - Uses GitHub GraphQL API (via `gh` CLI)
    - Zero external dependencies (stdlib only)
    - ~480 lines of code
 
-2. **`action.yml`** - GitHub Action definition
-   - Defines inputs/outputs
-   - Wraps Python script for GitHub Actions
-
-3. **`tests/test_processor.py`** - Test suite
+5. **`tests/test_processor.py`** - Test suite
    - Unit tests for core functions
    - No dependencies (simple assertions)
    - Run via: `python3 tests/test_processor.py`
+
+### v1 (Processor Only) Components
+
+Same as items 2, 4, and 5 above - focused on just the processor functionality.
 
 ### Key Functions
 
@@ -183,8 +204,10 @@ We use semantic versioning: `vMAJOR.MINOR.PATCH`
 
 ### Current Versions
 
-- **v1.1.0** (latest) - Severity parsing + outdated filtering + tests
-- **v1.0.0** - Initial release
+- **v2.0.0** (latest) - Full pipeline with Codex integration
+- **v1.1.0** - Severity parsing + outdated filtering + tests (processor only)
+- **v1.0.0** - Initial release (processor only)
+- **v2** (rolling) - Always points to latest v2.x.x
 - **v1** (rolling) - Always points to latest v1.x.x
 
 ### Creating a Release
@@ -223,8 +246,11 @@ Users can reference the action:
 
 ```
 /
-├── action.yml                    # GitHub Action definition
-├── coderabbit_processor.py       # Main script
+├── action.yml                    # v2: Main composite action (full pipeline)
+├── processor/
+│   └── action.yml                # v1: Review processor sub-action
+├── codex-prompt-template.sh      # v2: Codex prompt generator
+├── coderabbit_processor.py       # Core processor script
 ├── tests/
 │   └── test_processor.py         # Test suite
 ├── fixtures/
@@ -235,15 +261,65 @@ Users can reference the action:
 ├── .github/
 │   └── workflows/
 │       └── test.yml              # CI workflow
-├── README.md                     # User documentation
+├── README.md                     # User documentation (v1 & v2)
 ├── SETUP.md                      # Setup guide
 ├── AGENTS.md                     # This file
 └── LICENSE
 ```
 
+**Key Paths**:
+- **v2 users**: Use `benvenker/coderabbit-processor-action@v2` (action.yml)
+- **v1 users**: Use `benvenker/coderabbit-processor-action@v1` (processor/action.yml or old action.yml)
+
 ## Key Design Decisions
 
-### 1. No External Dependencies
+### v2-Specific Decisions
+
+#### 1. Composite Action Pattern
+
+**Why**: Composite actions allow us to orchestrate multiple steps while remaining shareable and reusable across repositories without requiring custom Docker images or JavaScript.
+
+**Benefits**:
+- No build step required
+- Fast execution (no image pull)
+- Easy to debug (all steps visible in workflow logs)
+- Supports calling other actions and shell scripts
+
+#### 2. Nested Action Structure (processor/ subdirectory)
+
+**Why**: Maintaining v1 as a standalone sub-action preserves backward compatibility while allowing v2 to build on top.
+
+**Approach**:
+- v1 users continue using `@v1` tag (points to processor/)
+- v2 users use `@v2` tag (points to root action.yml)
+- Both versions maintained independently
+
+**Limitation**: Composite actions can't call other composite actions via `uses:`, so we inline the processor logic in v2's action.yml instead of calling `processor/action.yml`.
+
+#### 3. Template-Based Prompt Generation
+
+**Why**: Different projects have different needs (project managers, file paths, custom instructions).
+
+**Approach**:
+- Shell script template with environment variable substitution
+- Supports Beads, Linear, GitHub Issues, or no project manager
+- Users can append custom instructions
+- Keeps prompt logic separate from action orchestration
+
+#### 4. Optional Environment Setup
+
+**Why**: Not all projects need Node, Go, or npm - make it configurable.
+
+**Inputs**:
+- `npm-ci`: Install npm dependencies if needed
+- `install-go-tools`: Install Go/Beads if needed
+- `node-version`: Specify Node version
+
+**Default**: Skip setup (fastest execution)
+
+### v1 Design Decisions (Processor Core)
+
+#### 1. No External Dependencies
 
 **Why**: GitHub Actions should be lightweight and reliable. Using only stdlib + `gh` CLI means:
 - No dependency management
